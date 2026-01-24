@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { FC, useState } from 'react';
 import { Config, defaultConfig, PATTERN_INVALID_FILE_PATH_CHAR, useMounted } from '@ehentai-helper/shared';
 import { Button, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, useDisclosure } from '@nextui-org/react';
 import { toast } from 'sonner';
@@ -20,7 +20,7 @@ const formatDownloadDir = (path: string) => {
   return path;
 };
 
-export const DownloadSettings = ({ trigger }: DownloadSettingsProps) => {
+export const DownloadSettings: FC<DownloadSettingsProps> = ({ trigger }) => {
   const { isOpen, onClose, onOpen, onOpenChange } = useDisclosure();
   const [config, setConfig] = useState<Config>(defaultConfig);
 
@@ -69,7 +69,7 @@ export const DownloadSettings = ({ trigger }: DownloadSettingsProps) => {
             <>
               <ModalHeader className="flex flex-col gap-1">Download Settings</ModalHeader>
               <ModalBody className="space-y-6">
-                <Settings />
+                <Settings config={config} setConfig={setConfig} />
               </ModalBody>
               <ModalFooter className="gap-3">
                 <Button
@@ -80,9 +80,8 @@ export const DownloadSettings = ({ trigger }: DownloadSettingsProps) => {
                 </Button>
 
                 <Button
-                  color="primary"
                   onPress={handleSave}
-                  className="bg-gradient-to-r from-blue-600 to-blue-500 font-semibold text-white shadow-lg transition-all duration-200 hover:from-blue-500 hover:to-blue-400 hover:shadow-xl">
+                  className="border border-slate-600 bg-slate-800 font-semibold text-slate-100 shadow-lg transition-all duration-200 hover:border-slate-500 hover:bg-slate-700 hover:text-white hover:shadow-xl">
                   Save Settings
                 </Button>
               </ModalFooter>

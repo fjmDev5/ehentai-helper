@@ -1,18 +1,6 @@
-import React, { FC, ReactNode, useState } from 'react';
-import { Config, defaultConfig, PATTERN_INVALID_FILE_PATH_CHAR, useMounted } from '@ehentai-helper/shared';
-import { Button, Checkbox, Input, Radio, RadioGroup, Tooltip } from '@nextui-org/react';
-import { toast } from 'sonner';
-
-const validateFilePath = (path: string) => {
-  if (PATTERN_INVALID_FILE_PATH_CHAR.test(path)) {
-    return null;
-  }
-  path = path.replace(/\\/g, '/');
-  if (path[path.length - 1] !== '/') {
-    path += '/';
-  }
-  return path;
-};
+import React, { FC, ReactNode } from 'react';
+import { Config } from '@ehentai-helper/shared';
+import { Checkbox, Input, Radio, RadioGroup, Tooltip } from '@nextui-org/react';
 
 const Row = ({ label, content }: Record<'label' | 'content', React.ReactNode>) => {
   return (
@@ -27,19 +15,10 @@ const TextInput = ({ className, ...rest }: React.InputHTMLAttributes<HTMLInputEl
   <input type="text" className={`border-primary border-b bg-transparent text-gray-100 ${className}`} {...rest} />
 );
 
-export const Settings: FC = () => {
-  const [config, setConfig] = useState<Config>(defaultConfig);
-
-  const restoreOptions = () => {
-    chrome.storage.sync.get(defaultConfig, items => {
-      setConfig(items as Config);
-    });
-  };
-
-  useMounted(() => {
-    restoreOptions();
-  });
-
+export const Settings: FC<{
+  config: Config;
+  setConfig: (config: Config) => void;
+}> = ({ config, setConfig }) => {
   const formItemMap: Record<keyof Config, { label: ReactNode; content: ReactNode }> = {
     intermediateDownloadPath: {
       label: (
@@ -159,9 +138,6 @@ export const Settings: FC = () => {
           <Row key={key} label={formItemMap[key].label} content={formItemMap[key].content} />
         ))}
       </div>
-      {/* <Button color="primary" variant="flat" className="bg-primary-700/40" onPress={saveOptions}>
-        Save
-      </Button> */}
     </div>
   );
 };

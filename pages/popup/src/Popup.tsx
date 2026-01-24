@@ -1,5 +1,4 @@
 import { Card, CardBody, Tab, Tabs } from '@nextui-org/react';
-import { Toaster } from 'sonner';
 
 import { Download } from './components/download';
 import History from './components/history';
@@ -11,7 +10,6 @@ const Popup = () => {
   return (
     <Page>
       <Noise />
-      <Toaster />
       <Card className="h-full w-full" radius="none">
         <CardBody className="items-center">
           <Tabs destroyInactiveTabPanel={false} color="default">
