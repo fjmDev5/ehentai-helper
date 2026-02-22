@@ -1,8 +1,5 @@
 import JSZip from 'jszip';
 
-let fetchedCount = 0;
-let totalToFetch = 0;
-
 chrome.runtime.onMessage.addListener(async (message) => {
   if (message.type === 'START_DOWNLOAD_OFFSCREEN') {
     handleDownload(message.payload);
@@ -16,10 +13,12 @@ chrome.runtime.sendMessage({ type: 'OFFSCREEN_READY' });
 
 async function handleDownload(payload: any) {
   const { galleryUrl, galleryInfo, range, galleryPageInfo, config } = payload;
+  const taskId = galleryUrl;
   const [startIndex, endIndex] = range;
-  totalToFetch = endIndex - startIndex + 1;
-  fetchedCount = 0;
+  const totalToFetch = endIndex - startIndex + 1;
+  let fetchedCount = 0;
   const zip = new JSZip();
+  const galleryOrigin = new URL(galleryUrl).origin + '/';
 
   if (config.saveGalleryInfo) {
     zip.file('info.txt', JSON.stringify(galleryInfo, null, 2));
@@ -33,7 +32,7 @@ async function handleDownload(payload: any) {
       const pageUrl = `${galleryUrl}?p=${p}`;
       const response = await fetch(pageUrl, { 
         credentials: 'include',
-        headers: { 'Referer': 'https://e-hentai.org/' }
+        headers: { 'Referer': galleryOrigin }
       });
       if (!response.ok) throw new Error(`Failed to fetch gallery page ${p}: ${response.statusText}`);
       const html = await response.text();
@@ -48,7 +47,10 @@ async function handleDownload(payload: any) {
         if (currentIndex < startIndex || currentIndex > endIndex) continue;
 
         try {
-          await downloadImage(zip, imagePageUrls[i], currentIndex, config, galleryPageInfo.totalImages);
+          const success = await downloadImage(zip, imagePageUrls[i], currentIndex, config, galleryPageInfo.totalImages, galleryOrigin);
+          if (success) {
+            fetchedCount++;
+          }
         } catch (err) {
           console.error(`Failed to download image ${currentIndex}:`, err);
           // Continue with other images even if one fails
@@ -56,7 +58,7 @@ async function handleDownload(payload: any) {
         
         chrome.runtime.sendMessage({
           type: 'DOWNLOAD_PROGRESS',
-          payload: { fetchedCount, totalCount: totalToFetch, status: 'downloading' }
+          payload: { taskId, fetchedCount, totalCount: totalToFetch, status: 'downloading' }
         }).catch(() => {});
 
         if (config.downloadInterval > 0) {
@@ -71,7 +73,7 @@ async function handleDownload(payload: any) {
 
     chrome.runtime.sendMessage({
       type: 'DOWNLOAD_PROGRESS',
-      payload: { fetchedCount, totalCount: totalToFetch, status: 'zipping' }
+      payload: { taskId, fetchedCount, totalCount: totalToFetch, status: 'zipping' }
     }).catch(() => {});
 
     // Use STORE compression for speed as images are already compressed
@@ -79,15 +81,18 @@ async function handleDownload(payload: any) {
       type: 'blob',
       compression: 'STORE'
     });
-    const zipName = `${removeInvalidCharFromFilename(galleryInfo.name)}.zip`;
+    const zipName = `${removeInvalidCharFromFilename(galleryInfo.name).substring(0, 200)}.zip`;
     const url = URL.createObjectURL(content);
 
     // Send result to background script as offscreen document cannot call chrome.downloads.download
+    const sanitizedPath = (config.intermediateDownloadPath || '').replace(/[\\:*?"<>|]/g, ' ').replace(/\/+$/, '');
     chrome.runtime.sendMessage({
       type: 'COMPLETE_ZIP',
       payload: {
+        taskId,
         url,
-        filename: `${config.intermediateDownloadPath.replace(/\/$/, '')}/${zipName}`
+        filename: sanitizedPath ? `${sanitizedPath}/${zipName}` : zipName,
+        config
       }
     });
 
@@ -95,7 +100,7 @@ async function handleDownload(payload: any) {
     console.error('Offscreen download failed:', error);
     chrome.runtime.sendMessage({
       type: 'DOWNLOAD_PROGRESS',
-      payload: { status: 'error', error: String(error) }
+      payload: { taskId, status: 'error', error: String(error) }
     }).catch(() => {});
   }
 }
@@ -114,10 +119,10 @@ function extractImagePageUrls(html: string): string[] {
   return urls;
 }
 
-async function downloadImage(zip: JSZip, url: string, index: number, config: any, totalImages: number) {
+async function downloadImage(zip: JSZip, url: string, index: number, config: any, totalImages: number, galleryOrigin: string): Promise<boolean> {
   const response = await fetch(url, { 
     credentials: 'include',
-    headers: { 'Referer': 'https://e-hentai.org/' }
+    headers: { 'Referer': galleryOrigin }
   });
   if (!response.ok) throw new Error(`Failed to fetch image page: ${response.statusText}`);
   const html = await response.text();
@@ -161,7 +166,7 @@ async function downloadImage(zip: JSZip, url: string, index: number, config: any
     .replace('[total]', String(totalImages)) + '.' + fileType;
 
   zip.file(filename, buffer);
-  fetchedCount++;
+  return true;
 }
 
 function removeInvalidCharFromFilename(filename: string) {

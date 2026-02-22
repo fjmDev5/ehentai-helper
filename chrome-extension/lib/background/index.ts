@@ -1,23 +1,47 @@
+const activeTasks = new Set<string>();
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'START_DOWNLOAD') {
+    const { galleryUrl } = message.payload;
+    activeTasks.add(galleryUrl);
     setupRefererRules().then(() => {
       startOffscreenDownload(message.payload);
     });
     sendResponse({ status: 'started' });
+  } else if (message.type === 'CHECK_TASK_STATUS') {
+    const { galleryUrl } = message.payload;
+    sendResponse({ isDownloading: activeTasks.has(galleryUrl) });
+  } else if (message.type === 'DOWNLOAD_PROGRESS') {
+    if (message.payload.status === 'error') {
+      const { taskId } = message.payload;
+      activeTasks.delete(taskId);
+      if (activeTasks.size === 0) {
+        chrome.offscreen.closeDocument().catch(() => {});
+      }
+    }
   } else if (message.type === 'COMPLETE_ZIP') {
-    const { url, filename } = message.payload;
+    const { url, filename, taskId, config } = message.payload;
+    // Ensure filename doesn't start with a slash, which can cause issues on some systems
+    const normalizedFilename = filename.replace(/^[\\\/]+/, '');
+    
     chrome.downloads.download({
       url,
-      filename,
-      saveAs: false
+      filename: normalizedFilename,
+      saveAs: false,
+      conflictAction: config?.filenameConflictAction || 'uniquify'
     }, (downloadId) => {
       if (chrome.runtime.lastError) {
-        console.error('Download failed to start:', chrome.runtime.lastError);
+        const errorMsg = chrome.runtime.lastError.message || 'Unknown error';
+        console.error(`Download failed to start for ${normalizedFilename}:`, errorMsg);
         chrome.runtime.sendMessage({
           type: 'DOWNLOAD_PROGRESS',
-          payload: { status: 'error', error: chrome.runtime.lastError.message }
+          payload: { taskId, status: 'error', error: errorMsg }
         }).catch(() => {});
-        chrome.offscreen.closeDocument();
+        
+        activeTasks.delete(taskId);
+        if (activeTasks.size === 0) {
+          chrome.offscreen.closeDocument().catch(() => {});
+        }
         return;
       }
 
@@ -27,17 +51,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             chrome.downloads.onChanged.removeListener(checkStatus);
             chrome.runtime.sendMessage({
               type: 'DOWNLOAD_PROGRESS',
-              payload: { status: 'completed' }
+              payload: { taskId, status: 'completed' }
             }).catch(() => {});
-            chrome.offscreen.closeDocument();
+
+            activeTasks.delete(taskId);
+            if (activeTasks.size === 0) {
+              chrome.offscreen.closeDocument().catch(() => {});
+            }
           } else if (delta.state?.current === 'interrupted') {
             chrome.downloads.onChanged.removeListener(checkStatus);
             console.error('Download interrupted:', delta.error?.current);
             chrome.runtime.sendMessage({
               type: 'DOWNLOAD_PROGRESS',
-              payload: { status: 'error', error: `Download interrupted: ${delta.error?.current}` }
+              payload: { taskId, status: 'error', error: `Download interrupted: ${delta.error?.current}` }
             }).catch(() => {});
-            chrome.offscreen.closeDocument();
+
+            activeTasks.delete(taskId);
+            if (activeTasks.size === 0) {
+              chrome.offscreen.closeDocument().catch(() => {});
+            }
           }
         }
       };
@@ -63,7 +95,29 @@ async function setupRefererRules() {
         ]
       },
       condition: {
-        urlFilter: '*',
+        urlFilter: '*://e-hentai.org/*',
+        initiatorDomains: [chrome.runtime.id],
+        resourceTypes: [
+          chrome.declarativeNetRequest.ResourceType.XMLHTTPREQUEST,
+          chrome.declarativeNetRequest.ResourceType.OTHER
+        ]
+      }
+    },
+    {
+      id: 2,
+      priority: 1,
+      action: {
+        type: chrome.declarativeNetRequest.RuleActionType.MODIFY_HEADERS,
+        requestHeaders: [
+          {
+            header: 'Referer',
+            operation: chrome.declarativeNetRequest.HeaderOperation.SET,
+            value: 'https://exhentai.org/'
+          }
+        ]
+      },
+      condition: {
+        urlFilter: '*://exhentai.org/*',
         initiatorDomains: [chrome.runtime.id],
         resourceTypes: [
           chrome.declarativeNetRequest.ResourceType.XMLHTTPREQUEST,
@@ -74,7 +128,7 @@ async function setupRefererRules() {
   ];
 
   await chrome.declarativeNetRequest.updateDynamicRules({
-    removeRuleIds: [1],
+    removeRuleIds: [1, 2],
     addRules: rules
   });
 }

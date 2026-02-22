@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   defaultConfig,
   getCurrentTabUrl,
@@ -15,7 +15,6 @@ import { atom, useAtom } from 'jotai';
 import {
   extractGalleryInfo,
   extractGalleryPageInfo,
-  removeInvalidCharFromFilename,
 } from '@/utils';
 
 import { DownloadIcon } from '../icons';
@@ -73,7 +72,10 @@ export const Download = () => {
   useEffect(() => {
     const handleMessage = (message: any) => {
       if (message.type === 'DOWNLOAD_PROGRESS') {
-        const { fetchedCount, totalCount, status: bgStatus, error } = message.payload;
+        const { taskId, fetchedCount, totalCount, status: bgStatus, error } = message.payload;
+        // Filter by current gallery URL
+        if (taskId !== galleryFrontPageUrl.current) return;
+
         if (fetchedCount !== undefined) setFetchedCount(fetchedCount);
         if (totalCount !== undefined) setTotalCount(totalCount);
 
@@ -270,15 +272,19 @@ export const Download = () => {
 
   useMounted(() => {
     (async () => {
-      // Check for active offscreen document to sync status
-      const existingContexts = await chrome.runtime.getContexts({
-        contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT]
-      });
-      if (existingContexts.length > 0) {
-        setStatus(StatusEnum.Downloading);
+      const url = await getCurrentTabUrl().catch(() => '');
+      // Check for active tasks in background
+      if (url) {
+        const response = await chrome.runtime.sendMessage({
+          type: 'CHECK_TASK_STATUS',
+          payload: { galleryUrl: url.substring(0, url.lastIndexOf('/') + 1) }
+        }).catch(() => ({ isDownloading: false }));
+        
+        if (response?.isDownloading) {
+          setStatus(StatusEnum.Downloading);
+        }
       }
 
-      const url = await getCurrentTabUrl().catch(() => '');
       // gallery page.
       if (isEHentaiGalleryUrl(url)) {
         chrome.storage.sync.get(defaultConfig, async items => {
