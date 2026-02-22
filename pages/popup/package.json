@@ -21,11 +21,13 @@
     "@ehentai-helper/shared": "workspace:*",
     "@ehentai-helper/storage": "workspace:*",
     "@tanstack/react-query": "^5.87.4",
-    "jotai": "^2.14.0"
+    "jotai": "^2.14.0",
+    "jszip": "^3.10.1"
   },
   "devDependencies": {
     "@ehentai-helper/hmr": "workspace:*",
     "@ehentai-helper/tailwindcss-config": "workspace:*",
-    "@ehentai-helper/tsconfig": "workspace:*"
+    "@ehentai-helper/tsconfig": "workspace:*",
+    "@types/jszip": "^3.4.1"
   }
 }

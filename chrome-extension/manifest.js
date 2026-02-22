@@ -5,7 +5,7 @@ const packageJson = JSON.parse(fs.readFileSync('../package.json', 'utf8'));
 const isFirefox = process.env.__FIREFOX__ === 'true';
 
 const features = {
-  background: false,
+  background: true,
   content: false,
   sidePanel: false,
 };
@@ -32,13 +32,14 @@ const manifest = Object.assign(
     name: 'E-Hentai Helper',
     version: packageJson.version,
     description: 'ehentai helper',
-    permissions: ['storage', 'tabs', 'downloads', 'activeTab'].concat(
+    permissions: ['storage', 'tabs', 'downloads', 'activeTab', 'offscreen', 'declarativeNetRequest'].concat(
       features.sidePanel ? sidePanelConfig.permissions : []
     ),
+    host_permissions: ['<all_urls>'],
     options_page: 'options/index.html',
     background: features.background
       ? {
-          service_worker: 'background.iife.js',
+          service_worker: 'background.js',
           type: 'module',
         }
       : undefined,

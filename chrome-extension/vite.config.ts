@@ -30,10 +30,12 @@ export default defineConfig({
   publicDir: resolve(rootDir, 'public'),
   build: {
     lib: {
-      formats: ['iife'],
-      entry: resolve(__dirname, 'lib/background/index.ts'),
-      name: 'BackgroundScript',
-      fileName: 'background',
+      formats: ['es'],
+      entry: {
+        background: resolve(__dirname, 'lib/background/index.ts'),
+        offscreen: resolve(__dirname, 'lib/offscreen/index.ts'),
+      },
+      name: 'EhentaiHelper',
     },
     outDir,
     sourcemap: isDev,
@@ -42,6 +44,9 @@ export default defineConfig({
     modulePreload: true,
     rollupOptions: {
       external: ['chrome'],
+      output: {
+        entryFileNames: '[name].js',
+      },
     },
   },
 });

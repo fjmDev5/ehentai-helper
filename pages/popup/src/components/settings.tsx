@@ -47,6 +47,7 @@ export const Settings: FC<{
       content: (
         <Checkbox
           isSelected={config.saveOriginalImages}
+          aria-label="Save original images"
           onChange={e => {
             setConfig({ ...config, saveOriginalImages: e.target.checked });
           }}
@@ -59,6 +60,7 @@ export const Settings: FC<{
         <div className="flex gap-4">
           <Checkbox
             isSelected={config.saveGalleryInfo}
+            aria-label="Save gallery information"
             onChange={e => {
               setConfig({ ...config, saveGalleryInfo: e.target.checked });
             }}
@@ -76,6 +78,7 @@ export const Settings: FC<{
         <RadioGroup
           orientation="horizontal"
           value={config.filenameConflictAction}
+          aria-label="Filename conflict action"
           onValueChange={val =>
             setConfig({
               ...config,
@@ -98,6 +101,7 @@ export const Settings: FC<{
           type="number"
           placeholder="300"
           value={String(config.downloadInterval)}
+          aria-label="Download interval (ms)"
           endContent={
             <div className="pointer-events-none flex items-center">
               <span className="text-default-400 text-small">ms</span>
@@ -116,6 +120,7 @@ export const Settings: FC<{
         <RadioGroup
           orientation="horizontal"
           value={config.fileNameRule}
+          aria-label="File name rule"
           onValueChange={val =>
             setConfig({
               ...config,

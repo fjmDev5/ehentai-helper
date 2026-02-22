@@ -181,6 +181,7 @@ const DownloadTable: FC = () => {
           isClearable
           className="w-full max-w-[50%]"
           placeholder="Search by filename..."
+          aria-label="Search by filename"
           startContent={<SearchIcon />}
           onClear={handleClearFilter}
           value={filterValue}
@@ -189,7 +190,7 @@ const DownloadTable: FC = () => {
 
         <Dropdown>
           <DropdownTrigger>
-            <Button endContent={<ChevronDownIcon className="text-small" />} variant="flat">
+            <Button endContent={<ChevronDownIcon className="text-small" />} variant="flat" aria-label="Filter by state">
               State
             </Button>
           </DropdownTrigger>
@@ -198,6 +199,7 @@ const DownloadTable: FC = () => {
             closeOnSelect={false}
             selectedKeys={statusFilter}
             selectionMode="multiple"
+            aria-label="Select state filter"
             onSelectionChange={setStatusFilter}>
             {stateSelections.map(state => (
               <DropdownItem key={state.id} className="capitalize">
@@ -210,6 +212,7 @@ const DownloadTable: FC = () => {
       <Table
         className="w-[680px]"
         isHeaderSticky
+        aria-label="Download list table"
         sortDescriptor={sortDescriptor}
         onSortChange={setSortDescriptor}
         bottomContent={
@@ -238,7 +241,11 @@ const DownloadTable: FC = () => {
           }}
         </TableHeader>
         <TableBody items={filteredList.slice((page - 1) * pageSize, page * pageSize)}>
-          {item => <TableRow key={item.id}>{key => <TableCell>{renderCell(item, key as string)}</TableCell>}</TableRow>}
+          {(item: any) => (
+            <TableRow key={(item as DownloadItem).id}>
+              {key => <TableCell>{renderCell(item as DownloadItem, key as string)}</TableCell>}
+            </TableRow>
+          )}
         </TableBody>
       </Table>
     </div>

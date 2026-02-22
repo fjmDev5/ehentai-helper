@@ -1,28 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   defaultConfig,
-  EXTENSION_NAME,
   getCurrentTabUrl,
   isEHentaiGalleryUrl,
   isEHentaiPageUrl,
-  isObject,
   useMounted,
   useStateRef,
 } from '@ehentai-helper/shared';
 import { downloadHistoryStorage, GalleryInfo } from '@ehentai-helper/storage';
 import { Button, type ButtonProps, Link, type LinkProps, Progress, Spinner } from '@nextui-org/react';
 import axios from 'axios';
-import { produce } from 'immer';
 import { atom, useAtom } from 'jotai';
 
-import { useDownload } from '@/hooks';
 import {
-  downloadAsTxtFile,
   extractGalleryInfo,
   extractGalleryPageInfo,
-  htmlStr2DOM,
   removeInvalidCharFromFilename,
-  splitFilename,
 } from '@/utils';
 
 import { DownloadIcon } from '../icons';
@@ -31,16 +24,8 @@ import { DownloadSettings } from './settings';
 
 /**
  * 表示下载过程中的各种状态。
- * @enum {number}
- * @property {number} Loading - 初始加载状态，正在检查当前页面。
- * @property {number} OtherPage - 当前标签页不是 E-Hentai 相关页面。
- * @property {number} EHentaiOther - 当前标签页是 E-Hentai 页面，但不是画廊页面。
- * @property {number} Fail - 获取画廊信息失败或发生错误。
- * @property {number} BeforeDownload - 画廊信息已加载，等待用户开始下载。
- * @property {number} Downloading - 文件正在下载中。
- * @property {number} DownloadSuccess - 所有选定的文件已成功下载。
  */
-enum StatusEnum {
+export enum StatusEnum {
   Loading = 0,
   OtherPage = 1,
   EHentaiOther = 2,
@@ -48,9 +33,8 @@ enum StatusEnum {
   BeforeDownload = 4,
   Downloading = 5,
   DownloadSuccess = 6,
+  Zipping = 7,
 }
-
-const textMime = 'text/plain';
 
 // Gallery information.
 let galleryInfo: GalleryInfo;
@@ -68,101 +52,47 @@ export const Download = () => {
   /* alter when mounted */
   const configRef = useRef(defaultConfig);
 
-  const [downloadList, setDownloadList] = useAtom(downloadListAtom);
+  const [fetchedCount, setFetchedCount] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
 
-  const [galleryPageInfo, setGalleryPageInfo, galleryPageInfoRef] = useStateRef({
+  const [galleryPageInfo, setGalleryPageInfo] = useStateRef({
     imagesPerPage: 0,
     numPages: 0,
     totalImages: 0,
   });
 
   const { totalImages } = galleryPageInfo;
-  const finishedList = downloadList.filter(item => item.state === 'complete');
 
   const [range, setRange] = useState<[number, number]>([1, galleryPageInfo.totalImages]);
   useEffect(() => {
     setRange([1, galleryPageInfo.totalImages]);
   }, [galleryInfo]);
 
-  const [startIndex, endIndex] = range;
-  const [start, end] = useMemo(() => {
-    const start = {
-      indexOfPage: (startIndex % galleryPageInfo.imagesPerPage) - 1,
-      page: ~~(startIndex / galleryPageInfo.imagesPerPage),
-    };
-    const end = {
-      indexOfPage: (endIndex % galleryPageInfo.imagesPerPage) - 1,
-      page: ~~(endIndex / galleryPageInfo.imagesPerPage),
-    };
-    return [start, end];
-  }, [galleryPageInfo.imagesPerPage, startIndex, endIndex]);
   const downloadCount = range[1] - range[0] + 1;
 
-  const downloadJob = {
-    /* 1.获取gallery整页所有图片 */
-    processGalleryPage: async (pageIndex: number) => {
-      if (pageIndex < start.page || pageIndex > end.page) return;
-      const pageUrl = `${galleryFrontPageUrl.current}?p=${pageIndex}`;
-      const { data: pageHtml } = await axios.get(pageUrl);
-      const imagePageUrls = downloadJob.extractImagePageUrls(pageHtml);
-      downloadJob.downloadImage(imagePageUrls[0], pageIndex, 0); // Start immediately.
-      let imageIndex = 1;
-      const imageInterval = setInterval(() => {
-        if (imageIndex === imagePageUrls.length) {
-          clearInterval(imageInterval);
-          return;
-        }
-        downloadJob.downloadImage(imagePageUrls[imageIndex], pageIndex, imageIndex);
-        imageIndex++;
-      }, configRef.current.downloadInterval);
-      return imagePageUrls.length;
-    },
+  useEffect(() => {
+    const handleMessage = (message: any) => {
+      if (message.type === 'DOWNLOAD_PROGRESS') {
+        const { fetchedCount, totalCount, status: bgStatus, error } = message.payload;
+        if (fetchedCount !== undefined) setFetchedCount(fetchedCount);
+        if (totalCount !== undefined) setTotalCount(totalCount);
 
-    /* 2.get image page urls from gallery page */
-    extractImagePageUrls: (html: string) => {
-      const doc = htmlStr2DOM(html);
-      return Array.from(doc.getElementById('gdt')?.childNodes || []).map(n => (n as HTMLAnchorElement).href);
-    },
-
-    /* 3. download image from image page */
-    downloadImage: async (url: string, pageIndex: number, imageIndex: number) => {
-      const currentIndex = pageIndex * galleryPageInfo.imagesPerPage + imageIndex + 1;
-      if (currentIndex < startIndex || currentIndex > endIndex) return;
-      const res = await axios.get(url);
-      const responseText = res.data;
-      const doc = htmlStr2DOM(responseText);
-      let imageUrl = (doc.getElementById('img') as HTMLImageElement).src;
-      // original
-      if (configRef.current.saveOriginalImages) {
-        try {
-          const originalImage = (doc.getElementById('i6')?.childNodes?.[3] as HTMLDivElement).getElementsByTagName(
-            'a'
-          )[0].href;
-          imageUrl = originalImage || imageUrl;
-        } catch (e) {
-          console.log('get original image failed@', e);
+        if (bgStatus === 'downloading') {
+          setStatus(StatusEnum.Downloading);
+        } else if (bgStatus === 'zipping') {
+          setStatus(StatusEnum.Zipping);
+        } else if (bgStatus === 'completed') {
+          setStatus(StatusEnum.DownloadSuccess);
+        } else if (bgStatus === 'error') {
+          console.error('Download error from background:', error);
+          setStatus(StatusEnum.Fail);
         }
       }
-      chrome.downloads.download({ url: imageUrl }, id => {
-        imageIdMap.set(id, currentIndex);
-      });
-    },
+    };
 
-    /** 开启下载图片 */
-    downloadAllImages: () => {
-      let pageIndex = start.page;
-      downloadJob.processGalleryPage(pageIndex); // Start immediately.
-      pageIndex++;
-      const pageInterval = setInterval(() => {
-        if (pageIndex === galleryPageInfo.numPages) {
-          clearInterval(pageInterval);
-          return;
-        }
-        downloadJob.processGalleryPage(pageIndex);
-        pageIndex++;
-      }, configRef.current.downloadInterval * galleryPageInfo.imagesPerPage);
-    },
-  };
+    chrome.runtime.onMessage.addListener(handleMessage);
+    return () => chrome.runtime.onMessage.removeListener(handleMessage);
+  }, []);
 
   const renders = {
     status: () => {
@@ -211,8 +141,18 @@ export const Download = () => {
                 <span className="text-primaryBlue-100 text-sm font-medium">Downloading in progress</span>
               </div>
               <p className="text-center text-xs leading-relaxed text-gray-400">
-                Please keep this popup open until all downloads start
+                Download is handled in background. You can close this popup.
               </p>
+            </div>
+          );
+        case StatusEnum.Zipping:
+          return (
+            <div className="from-indigo-500/20 to-purple-500/20 border-indigo-500/30 flex flex-col items-center gap-3 rounded-xl border bg-gradient-to-r p-4">
+              <div className="flex items-center gap-2">
+                <Spinner size="sm" color="secondary" />
+                <span className="text-indigo-100 text-sm font-medium">Zipping files...</span>
+              </div>
+              <p className="text-center text-xs leading-relaxed text-gray-400">Please wait while we prepare your ZIP</p>
             </div>
           );
         case StatusEnum.DownloadSuccess:
@@ -246,8 +186,8 @@ export const Download = () => {
                 </svg>
               </div>
               <div className="text-center">
-                <h3 className="mb-1 text-sm font-medium text-red-100">Connection Failed</h3>
-                <p className="text-xs text-red-200/80">Unable to fetch data from server. Please try again later.</p>
+                <h3 className="mb-1 text-sm font-medium text-red-100">Operation Failed</h3>
+                <p className="text-xs text-red-200/80">An error occurred during download or zipping.</p>
               </div>
             </div>
           );
@@ -258,17 +198,17 @@ export const Download = () => {
         <div className="flex items-center justify-between text-sm">
           <span className="text-gray-400">Progress</span>
           <div className="flex items-center gap-2">
-            <span className="text-lg font-semibold text-white">{finishedList.length}</span>
+            <span className="text-lg font-semibold text-white">{fetchedCount}</span>
             <span className="text-gray-500">/</span>
-            <span className="text-lg font-medium text-gray-300">{downloadCount}</span>
+            <span className="text-lg font-medium text-gray-300">{totalCount || downloadCount}</span>
           </div>
         </div>
         <div className="space-y-2">
           <Progress
             aria-label="Download progress"
-            value={finishedList.length}
+            value={fetchedCount}
             minValue={0}
-            maxValue={downloadCount}
+            maxValue={totalCount || downloadCount}
             className="w-full"
             classNames={{
               base: 'max-w-md',
@@ -279,78 +219,13 @@ export const Download = () => {
             }}
           />
           <div className="flex justify-between text-xs text-gray-500">
-            <span>{Math.round((finishedList.length / downloadCount) * 100)}% complete</span>
-            <span>{downloadCount - finishedList.length} remaining</span>
+            <span>{Math.round((fetchedCount / (totalCount || downloadCount)) * 100)}% complete</span>
+            <span>{(totalCount || downloadCount) - fetchedCount} remaining</span>
           </div>
         </div>
       </div>
     ),
   };
-
-  const handleDownloadCreated: Parameters<typeof chrome.downloads.onCreated.addListener>[0] = downloadItem => {
-    if (downloadItem.mime === textMime) {
-      return;
-    }
-    setDownloadList(prev => {
-      return [...prev, downloadItem];
-    });
-  };
-
-  const handleDownloadChanged: Parameters<typeof chrome.downloads.onChanged.addListener>[0] = downloadDelta => {
-    const { id } = downloadDelta;
-    const newVal = {};
-    /* patch item from downloadDelta */
-    for (const key in downloadDelta) {
-      if (isObject(downloadDelta[key])) {
-        newVal[key] = downloadDelta[key].current;
-      }
-    }
-    setDownloadList(
-      produce(draft => {
-        const targetIndex = draft.findIndex(item => item.id === id);
-        draft[targetIndex] = { ...draft[targetIndex], ...newVal };
-      })
-    );
-  };
-
-  // Save to the corresponding folder and rename files.
-  const handleDeterminFilename: Parameters<typeof chrome.downloads.onDeterminingFilename.addListener>[0] = (
-    downloadItem,
-    suggest
-  ) => {
-    if (downloadItem.byExtensionName !== EXTENSION_NAME) return;
-    const { id } = downloadItem;
-    const { intermediateDownloadPath, fileNameRule, filenameConflictAction: conflictAction } = configRef.current;
-
-    let { filename } = downloadItem;
-    const [name, fileType] = splitFilename(filename);
-    // Metadata.
-    if (downloadItem.mime === textMime) {
-      filename = `${intermediateDownloadPath}/info.txt`;
-    } else {
-      filename = `${intermediateDownloadPath}/${fileNameRule
-        .replace('[index]', String(imageIdMap.get(id)))
-        .replace('[name]', name)
-        .replace('[total]', `${galleryPageInfoRef.current.totalImages}`)}.${fileType}`;
-    }
-
-    suggest({
-      filename,
-      conflictAction,
-    });
-  };
-
-  useEffect(() => {
-    if (status === StatusEnum.Downloading && downloadCount === finishedList.length) {
-      setStatus(StatusEnum.DownloadSuccess);
-    }
-  }, [status, downloadList]);
-
-  useDownload({
-    onDownloadCreated: handleDownloadCreated,
-    onDownloadChanged: handleDownloadChanged,
-    onDeterminingFilename: handleDeterminFilename,
-  });
 
   const renderGotoEHentai = () => {
     const buttonProps = {
@@ -363,9 +238,7 @@ export const Download = () => {
     } satisfies LinkProps & ButtonProps;
     return (
       <div className="flex flex-col items-center gap-4 rounded-2xl border border-gray-700/50 bg-gradient-to-br from-gray-800/40 to-gray-900/40 p-6">
-        {/* circle */}
         <div className="bg-primary-500/20 flex h-12 w-12 items-center justify-center rounded-full">
-          {/* link icon */}
           <svg className="text-primary-400 h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               strokeLinecap="round"
@@ -397,6 +270,14 @@ export const Download = () => {
 
   useMounted(() => {
     (async () => {
+      // Check for active offscreen document to sync status
+      const existingContexts = await chrome.runtime.getContexts({
+        contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT]
+      });
+      if (existingContexts.length > 0) {
+        setStatus(StatusEnum.Downloading);
+      }
+
       const url = await getCurrentTabUrl().catch(() => '');
       // gallery page.
       if (isEHentaiGalleryUrl(url)) {
@@ -413,7 +294,6 @@ export const Download = () => {
           const pageInfo = extractGalleryPageInfo(galleryHtmlStr);
           setGalleryPageInfo(pageInfo);
           galleryInfo = await extractGalleryInfo(galleryHtmlStr);
-          configRef.current.intermediateDownloadPath += removeInvalidCharFromFilename(galleryInfo.name);
           setStatus(StatusEnum.BeforeDownload);
         });
         return;
@@ -439,11 +319,21 @@ export const Download = () => {
     } catch (e) {
       console.error('add download history failed@', e);
     }
+
+    setFetchedCount(0);
+    setTotalCount(downloadCount);
     setStatus(StatusEnum.Downloading);
-    downloadJob.downloadAllImages();
-    if (configRef.current.saveGalleryInfo) {
-      downloadAsTxtFile(JSON.stringify(galleryInfo, null, 2));
-    }
+
+    chrome.runtime.sendMessage({
+      type: 'START_DOWNLOAD',
+      payload: {
+        galleryUrl: galleryFrontPageUrl.current,
+        galleryInfo,
+        range,
+        galleryPageInfo,
+        config: configRef.current,
+      },
+    });
   };
 
   return (
@@ -457,7 +347,7 @@ export const Download = () => {
       <div className="-mt-16 flex flex-col items-center justify-center">{renders.status()}</div>
 
       {/* Progress Section */}
-      {[StatusEnum.Downloading, StatusEnum.DownloadSuccess].includes(status) && (
+      {[StatusEnum.Downloading, StatusEnum.Zipping, StatusEnum.DownloadSuccess].includes(status) && (
         <div className="border-t border-gray-700/30 bg-gray-800/20 px-8 py-6">{renders.progress()}</div>
       )}
 

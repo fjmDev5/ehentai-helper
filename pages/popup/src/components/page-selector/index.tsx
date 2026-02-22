@@ -17,6 +17,7 @@ export const PageSelector: FC<PageSelectorProps> = ({ range, maxValue, setRange,
           value={String(range[0])}
           max={range[1]}
           size="sm"
+          aria-label="Start page"
           onChange={e => {
             const { value } = e.target;
             range[0] = Number(value);
@@ -30,6 +31,7 @@ export const PageSelector: FC<PageSelectorProps> = ({ range, maxValue, setRange,
           value={String(range[1])}
           max={maxValue}
           size="sm"
+          aria-label="End page"
           onChange={e => {
             const { value } = e.target;
             range[1] = Number(value);
@@ -42,6 +44,7 @@ export const PageSelector: FC<PageSelectorProps> = ({ range, maxValue, setRange,
   return (
     <Slider
       label={<span className="whitespace-nowrap pr-2">Page Range:</span>}
+      aria-label="Select page range"
       size="sm"
       value={range}
       step={1}

@@ -18,9 +18,11 @@
   },
   "type": "module",
   "dependencies": {
-    "webextension-polyfill": "^0.12.0",
     "@ehentai-helper/shared": "workspace:*",
-    "@ehentai-helper/storage": "workspace:*"
+    "@ehentai-helper/storage": "workspace:*",
+    "axios": "^1.7.9",
+    "jszip": "^3.10.1",
+    "webextension-polyfill": "^0.12.0"
   },
   "devDependencies": {
     "@ehentai-helper/dev-utils": "workspace:*",
