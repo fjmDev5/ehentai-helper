@@ -21,7 +21,8 @@
     "@ehentai-helper/shared": "workspace:*",
     "@ehentai-helper/storage": "workspace:*",
     "axios": "^1.7.9",
-    "jszip": "^3.10.1",
+    "fflate": "^0.8.2",
+    "p-limit": "^7.3.0",
     "webextension-polyfill": "^0.12.0"
   },
   "devDependencies": {

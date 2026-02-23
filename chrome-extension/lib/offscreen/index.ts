@@ -1,4 +1,5 @@
-import JSZip from 'jszip';
+import { zipSync } from 'fflate';
+import pLimit from 'p-limit';
 
 chrome.runtime.onMessage.addListener(async (message) => {
   if (message.type === 'START_DOWNLOAD_OFFSCREEN') {
@@ -17,55 +18,85 @@ async function handleDownload(payload: any) {
   const [startIndex, endIndex] = range;
   const totalToFetch = endIndex - startIndex + 1;
   let fetchedCount = 0;
-  const zip = new JSZip();
+  const zipFiles: Record<string, [Uint8Array, { level: 0 }]> = {};
   const galleryOrigin = new URL(galleryUrl).origin + '/';
 
   if (config.saveGalleryInfo) {
-    zip.file('info.txt', JSON.stringify(galleryInfo, null, 2));
+    const infoText = JSON.stringify(galleryInfo, null, 2);
+    zipFiles['info.txt'] = [new TextEncoder().encode(infoText), { level: 0 }];
   }
 
   const startPage = Math.floor((startIndex - 1) / galleryPageInfo.imagesPerPage);
   const endPage = Math.floor((endIndex - 1) / galleryPageInfo.imagesPerPage);
 
   try {
+    // 1. Fetch all gallery pages in parallel (limited)
+    const pageLimit = pLimit(3);
+    const pageUrls: string[] = [];
     for (let p = startPage; p <= endPage; p++) {
-      const pageUrl = `${galleryUrl}?p=${p}`;
-      const response = await fetch(pageUrl, { 
-        credentials: 'include',
-        headers: { 'Referer': galleryOrigin }
-      });
-      if (!response.ok) throw new Error(`Failed to fetch gallery page ${p}: ${response.statusText}`);
-      const html = await response.text();
-      const imagePageUrls = extractImagePageUrls(html);
-      
-      if (imagePageUrls.length === 0) {
-        console.warn(`No image page URLs found on page ${p}`);
-      }
-
-      for (let i = 0; i < imagePageUrls.length; i++) {
-        const currentIndex = p * galleryPageInfo.imagesPerPage + i + 1;
-        if (currentIndex < startIndex || currentIndex > endIndex) continue;
-
-        try {
-          const success = await downloadImage(zip, imagePageUrls[i], currentIndex, config, galleryPageInfo.totalImages, galleryOrigin);
-          if (success) {
-            fetchedCount++;
-          }
-        } catch (err) {
-          console.error(`Failed to download image ${currentIndex}:`, err);
-          // Continue with other images even if one fails
-        }
-        
-        chrome.runtime.sendMessage({
-          type: 'DOWNLOAD_PROGRESS',
-          payload: { taskId, fetchedCount, totalCount: totalToFetch, status: 'downloading' }
-        }).catch(() => {});
-
-        if (config.downloadInterval > 0) {
-          await new Promise(resolve => setTimeout(resolve, config.downloadInterval));
-        }
-      }
+      pageUrls.push(`${galleryUrl}?p=${p}`);
     }
+
+    const galleryPagesHtml = await Promise.all(
+      pageUrls.map(url => 
+        pageLimit(async () => {
+          const response = await fetch(url, { 
+            credentials: 'include',
+            headers: { 'Referer': galleryOrigin }
+          });
+          if (!response.ok) throw new Error(`Failed to fetch gallery page ${url}: ${response.statusText}`);
+          return response.text();
+        })
+      )
+    );
+
+    // 2. Extract all image page URLs
+    const allImagePageUrls: { url: string, index: number }[] = [];
+    galleryPagesHtml.forEach((html, pageIdx) => {
+      const p = startPage + pageIdx;
+      const urls = extractImagePageUrls(html);
+      urls.forEach((url, i) => {
+        const currentIndex = p * galleryPageInfo.imagesPerPage + i + 1;
+        if (currentIndex >= startIndex && currentIndex <= endIndex) {
+          allImagePageUrls.push({ url, index: currentIndex });
+        }
+      });
+    });
+
+    if (allImagePageUrls.length === 0) {
+      throw new Error('No image page URLs found in the specified range.');
+    }
+
+    // 3. Download images with concurrency limit
+    // If downloadInterval is 0, use a reasonable concurrency like 5
+    // If downloadInterval > 0, we still use concurrency 1 to be safe, but we could technically do more
+    const downloadConcurrency = config.downloadInterval > 0 ? 1 : 5;
+    const downloadLimit = pLimit(downloadConcurrency);
+
+    await Promise.all(
+      allImagePageUrls.map(({ url, index }) => 
+        downloadLimit(async () => {
+          try {
+            const result = await downloadImage(url, index, config, galleryPageInfo.totalImages, galleryOrigin);
+            if (result) {
+              zipFiles[result.filename] = [new Uint8Array(result.buffer), { level: 0 }];
+              fetchedCount++;
+            }
+          } catch (err) {
+            console.error(`Failed to download image ${index}:`, err);
+          }
+
+          chrome.runtime.sendMessage({
+            type: 'DOWNLOAD_PROGRESS',
+            payload: { taskId, fetchedCount, totalCount: totalToFetch, status: 'downloading' }
+          }).catch(() => {});
+
+          if (config.downloadInterval > 0) {
+            await new Promise(resolve => setTimeout(resolve, config.downloadInterval));
+          }
+        })
+      )
+    );
 
     if (fetchedCount === 0) {
       throw new Error('No images were successfully downloaded.');
@@ -76,15 +107,15 @@ async function handleDownload(payload: any) {
       payload: { taskId, fetchedCount, totalCount: totalToFetch, status: 'zipping' }
     }).catch(() => {});
 
-    // Use STORE compression for speed as images are already compressed
-    const content = await zip.generateAsync({ 
-      type: 'blob',
-      compression: 'STORE'
-    });
+    // 4. Use fflate for fast zipping
+    // zipSync is very fast for STORE (level: 0)
+    const zipped = zipSync(zipFiles);
+    const content = new Blob([zipped], { type: 'application/zip' });
+    
     const zipName = `${removeInvalidCharFromFilename(galleryInfo.name).substring(0, 200)}.zip`;
     const url = URL.createObjectURL(content);
 
-    // Send result to background script as offscreen document cannot call chrome.downloads.download
+    // Send result to background script
     const sanitizedPath = (config.intermediateDownloadPath || '').replace(/[\\:*?"<>|]/g, ' ').replace(/\/+$/, '');
     chrome.runtime.sendMessage({
       type: 'COMPLETE_ZIP',
@@ -107,8 +138,6 @@ async function handleDownload(payload: any) {
 
 function extractImagePageUrls(html: string): string[] {
   const urls: string[] = [];
-  // More robust regex to handle different E-Hentai gallery layouts (Minimal, Thumbnail, etc.)
-  // Looks for any link that matches the image page pattern /s/HASH/INDEX-PAGE
   const sPageRegex = /href=["'](https?:\/\/e[-x]hentai\.org\/s\/[^"']+)["']/g;
   let match;
   while ((match = sPageRegex.exec(html)) !== null) {
@@ -119,7 +148,7 @@ function extractImagePageUrls(html: string): string[] {
   return urls;
 }
 
-async function downloadImage(zip: JSZip, url: string, index: number, config: any, totalImages: number, galleryOrigin: string): Promise<boolean> {
+async function downloadImage(url: string, index: number, config: any, totalImages: number, galleryOrigin: string): Promise<{ filename: string, buffer: ArrayBuffer } | null> {
   const response = await fetch(url, { 
     credentials: 'include',
     headers: { 'Referer': galleryOrigin }
@@ -128,7 +157,6 @@ async function downloadImage(zip: JSZip, url: string, index: number, config: any
   const html = await response.text();
 
   let imageUrl = '';
-  // Enhanced regex for image URL extraction
   const imgMatch = /<img[^>]+id=["']img["'][^>]+src=["']([^"']+)["']/i.exec(html) ||
                    /src=["']([^"']+)["'][^>]+id=["']img["']/i.exec(html);
   
@@ -150,7 +178,7 @@ async function downloadImage(zip: JSZip, url: string, index: number, config: any
 
   const imageRes = await fetch(imageUrl, { 
     credentials: 'include',
-    headers: { 'Referer': url } // Referer should be the image page for image downloads
+    headers: { 'Referer': url }
   });
   if (!imageRes.ok) throw new Error(`Failed to fetch image from ${imageUrl}: ${imageRes.statusText}`);
   const buffer = await imageRes.arrayBuffer();
@@ -165,8 +193,7 @@ async function downloadImage(zip: JSZip, url: string, index: number, config: any
     .replace('[name]', originalName)
     .replace('[total]', String(totalImages)) + '.' + fileType;
 
-  zip.file(filename, buffer);
-  return true;
+  return { filename, buffer };
 }
 
 function removeInvalidCharFromFilename(filename: string) {
